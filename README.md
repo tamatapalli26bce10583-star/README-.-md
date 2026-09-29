@@ -1,0 +1,216 @@
+#"""
+Digital Vending Machine
+-----------------------
+A console-based vending machine simulation with:
+  * Product inventory (stock, price, slot code)
+  * Coin/note insertion and balance tracking
+  * Change calculation (greedy, using available denominations)
+  * Admin mode (PIN protected) for restocking and viewing sales
+  * Sales log saved to JSON
+
+Run:  python vending_machine.py
+"""
+
+import json
+import os
+from dataclasses import dataclass, asdict
+from datetime import datetime
+
+ADMIN_PIN = "1234"
+SALES_FILE = "sales_log.json"
+DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1]  # currency units (e.g. INR)
+
+
+@dataclass
+class Product:
+    code: str
+    name: str
+    price: int
+    stock: int
+
+
+class VendingMachine:
+    def __init__(self):
+        self.products = {
+            "A1": Product("A1", "Potato Chips", 20, 10),
+            "A2": Product("A2", "Biscuits", 15, 8),
+            "A3": Product("A3", "Chocolate Bar", 40, 6),
+            "B1": Product("B1", "Cold Drink", 35, 10),
+            "B2": Product("B2", "Water Bottle", 20, 12),
+            "B3": Product("B3", "Fruit Juice", 30, 5),
+        }
+        self.balance = 0
+        self.sales = self._load_sales()
+
+    # ---------- persistence ----------
+    def _load_sales(self):
+        if os.path.exists(SALES_FILE):
+            try:
+                with open(SALES_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+        return []
+
+    def _save_sales(self):
+        with open(SALES_FILE, "w") as f:
+            json.dump(self.sales, f, indent=2)
+
+    # ---------- display ----------
+    def show_products(self):
+        print("\n" + "=" * 46)
+        print(f"{'CODE':<6}{'ITEM':<20}{'PRICE':>7}{'STOCK':>10}")
+        print("-" * 46)
+        for p in self.products.values():
+            stock = str(p.stock) if p.stock > 0 else "SOLD OUT"
+            print(f"{p.code:<6}{p.name:<20}{p.price:>7}{stock:>10}")
+        print("=" * 46)
+        print(f"Current balance: {self.balance}")
+
+    # ---------- money ----------
+    def insert_money(self, amount):
+        if amount not in DENOMINATIONS:
+            print(f"Invalid amount. Accepted: {DENOMINATIONS}")
+            return
+        self.balance += amount
+        print(f"Inserted {amount}. Balance: {self.balance}")
+
+    @staticmethod
+    def make_change(amount):
+        change = {}
+        for d in DENOMINATIONS:
+            if amount >= d:
+                change[d], amount = divmod(amount, d)
+        return change
+
+    def refund(self):
+        if self.balance == 0:
+            print("No balance to refund.")
+            return
+        change = self.make_change(self.balance)
+        print(f"Refunding {self.balance}:")
+        for d, n in change.items():
+            print(f"   {n} x {d}")
+        self.balance = 0
+
+    # ---------- purchase ----------
+    def select_product(self, code):
+        code = code.upper()
+        product = self.products.get(code)
+        if not product:
+            print("Invalid product code.")
+            return
+        if product.stock <= 0:
+            print(f"Sorry, {product.name} is sold out.")
+            return
+        if self.balance < product.price:
+            print(f"Insufficient balance. Need {product.price - self.balance} more.")
+            return
+
+        product.stock -= 1
+        self.balance -= product.price
+        self.sales.append({
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "code": product.code,
+            "item": product.name,
+            "price": product.price,
+        })
+        self._save_sales()
+        print(f"\nDispensing {product.name}... Enjoy!")
+        if self.balance > 0:
+            print("Returning your change:")
+            self.refund()
+
+    # ---------- admin ----------
+    def admin_menu(self):
+        pin = input("Enter admin PIN: ").strip()
+        if pin != ADMIN_PIN:
+            print("Wrong PIN.")
+            return
+        while True:
+            print("\n--- ADMIN MENU ---")
+            print("1. Restock item\n2. View sales report\n3. Change price\n4. Exit admin")
+            choice = input("Choose: ").strip()
+            if choice == "1":
+                self._admin_restock()
+            elif choice == "2":
+                self._sales_report()
+            elif choice == "3":
+                self._admin_price()
+            elif choice == "4":
+                break
+            else:
+                print("Invalid choice.")
+
+    def _ask_int(self, prompt):
+        try:
+            value = int(input(prompt))
+            return value if value > 0 else None
+        except ValueError:
+            return None
+
+    def _admin_restock(self):
+        code = input("Product code: ").strip().upper()
+        if code not in self.products:
+            print("Invalid code.")
+            return
+        qty = self._ask_int("Quantity to add: ")
+        if qty is None:
+            print("Enter a positive whole number.")
+            return
+        self.products[code].stock += qty
+        print(f"{self.products[code].name} stock is now {self.products[code].stock}.")
+
+    def _admin_price(self):
+        code = input("Product code: ").strip().upper()
+        if code not in self.products:
+            print("Invalid code.")
+            return
+        price = self._ask_int("New price: ")
+        if price is None:
+            print("Enter a positive whole number.")
+            return
+        self.products[code].price = price
+        print("Price updated.")
+
+    def _sales_report(self):
+        if not self.sales:
+            print("No sales yet.")
+            return
+        total = sum(s["price"] for s in self.sales)
+        by_item = {}
+        for s in self.sales:
+            by_item[s["item"]] = by_item.get(s["item"], 0) + 1
+        print(f"\nTotal sales: {len(self.sales)} items, revenue {total}")
+        for item, count in sorted(by_item.items(), key=lambda x: -x[1]):
+            print(f"   {item:<20}{count}")
+
+
+def main():
+    vm = VendingMachine()
+    print("Welcome to the Digital Vending Machine!")
+    while True:
+        vm.show_products()
+        print("\n1. Insert money   2. Select product   3. Refund   4. Admin   5. Exit")
+        choice = input("Choose: ").strip()
+        if choice == "1":
+            try:
+                vm.insert_money(int(input(f"Amount {DENOMINATIONS}: ")))
+            except ValueError:
+                print("Please enter a number.")
+        elif choice == "2":
+            vm.select_product(input("Enter product code (e.g. A1): ").strip())
+        elif choice == "3":
+            vm.refund()
+        elif choice == "4":
+            vm.admin_menu()
+        elif choice == "5":
+            vm.refund()
+            print("Thank you! Goodbye.")
+            break
+        else:
+            print("Invalid choice.")
+
+
+if __name__ == "__main__":
+    main() README-.-md
